@@ -1,7 +1,10 @@
-{-# LANGUAGE CPP            #-}
-{-# LANGUAGE DataKinds      #-}
-{-# LANGUAGE GADTs          #-}
-{-# LANGUAGE NamedFieldPuns #-}
+{-# LANGUAGE CPP                 #-}
+{-# LANGUAGE DataKinds           #-}
+{-# LANGUAGE GADTs               #-}
+{-# LANGUAGE NamedFieldPuns      #-}
+{-# LANGUAGE RankNTypes          #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TypeApplications    #-}
 
 module Ide.Plugin.Rename (descriptor) where
 
@@ -11,7 +14,7 @@ import           Control.Monad.Trans.Class
 import           Control.Monad.Trans.Except
 import           Data.Containers.ListUtils
 import           Data.Generics
-import           Data.List.Extra                      hiding (nubOrd)
+import           Data.List.Extra                      hiding (nubOrd, replace)
 import qualified Data.Map                             as M
 import           Data.Maybe
 import qualified Data.Text                            as T
@@ -25,7 +28,10 @@ import           GHC.Types.Name
 #else
 import           Name
 #endif
+import           Debug.Trace
 import           Development.IDE.GHC.ExactPrint       (GetAnnotatedParsedSource (GetAnnotatedParsedSource))
+import           GHC.Parser.Annotation                (AnnContext, AnnList,
+                                                       AnnParen, AnnPragma)
 import           HieDb.Query
 import           Ide.Plugin.Config
 import           Ide.PluginUtils
@@ -44,11 +50,16 @@ renameProvider state pluginId (RenameParams (TextDocumentIdentifier uri) pos _pr
     response $ do
         nfp <- safeUriToNfp uri
         oldName <- getNameAtPos state nfp pos
+        traceM $ "oldName: " <> prettyPrint oldName
         workspaceRefs <- refsAtName state nfp oldName
+        traceM $ "workspaceRefs: " <> show workspaceRefs
         let filesRefs = groupOn locToUri workspaceRefs
             getFileEdits = ap (getSrcEdits state . renameModRefs newNameText) (locToUri . head)
 
+        traceM $ "\nfilesRefs: " <> show filesRefs
+
         fileEdits <- mapM getFileEdits filesRefs
+        traceM $ "\nfileEdits: " <> show fileEdits
         pure $ foldl' (<>) mempty fileEdits
 
 -------------------------------------------------------------------------------
@@ -95,12 +106,32 @@ renameModRefs ::
     HsModule GhcPs
     -> HsModule GhcPs
 #endif
+#if MIN_VERSION_ghc(9,2,1)
+renameModRefs newNameText refs = everywhere $
+    -- there has to be a better way...
+    mkT (replace @AnnListItem) `extT`
+    -- replace @AnnList `extT` -- not needed
+    -- replace @AnnParen `extT`   -- not needed
+    -- replace @AnnPragma `extT` -- not needed
+    -- replace @AnnContext `extT` -- not needed
+    -- replace @NoEpAnns `extT` -- not needed
+    replace @NameAnn
+    where
+        replace :: forall an. Typeable an => LocatedAn an RdrName -> LocatedAn an RdrName
+        replace (L srcSpan oldRdrName)
+            | isRef (locA srcSpan) = L srcSpan $ newRdrName oldRdrName
+        replace lOldRdrName = lOldRdrName
+#else
 renameModRefs newNameText refs = everywhere $ mkT replace
     where
         replace :: Located RdrName -> Located RdrName
         replace (L srcSpan oldRdrName)
             | isRef srcSpan = L srcSpan $ newRdrName oldRdrName
         replace lOldRdrName = lOldRdrName
+#endif
+
+        isRef :: SrcSpan -> Bool
+        isRef = (`elem` refs) . fromJust . srcSpanToLocation
 
         newRdrName :: RdrName -> RdrName
         newRdrName oldRdrName = case oldRdrName of
@@ -109,9 +140,8 @@ renameModRefs newNameText refs = everywhere $ mkT replace
 
         newOccName = mkTcOcc $ T.unpack newNameText
 
-        isRef :: SrcSpan -> Bool
-        isRef = (`elem` refs) . fromJust . srcSpanToLocation
-
+newRdrName :: RdrName -> RdrName
+newRdrName = error "not implemented"
 -------------------------------------------------------------------------------
 -- Reference finding
 
