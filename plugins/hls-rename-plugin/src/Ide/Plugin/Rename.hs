@@ -24,14 +24,14 @@ import           Development.IDE.Core.Shake
 import           Development.IDE.GHC.Compat
 import           Development.IDE.Spans.AtPoint
 #if MIN_VERSION_ghc(9,0,1)
+import           GHC.Parser.Annotation                (AnnContext, AnnList,
+                                                       AnnParen, AnnPragma)
 import           GHC.Types.Name
 #else
 import           Name
 #endif
 import           Debug.Trace
 import           Development.IDE.GHC.ExactPrint       (GetAnnotatedParsedSource (GetAnnotatedParsedSource))
-import           GHC.Parser.Annotation                (AnnContext, AnnList,
-                                                       AnnParen, AnnPragma)
 import           HieDb.Query
 import           Ide.Plugin.Config
 import           Ide.PluginUtils
@@ -84,7 +84,7 @@ getSrcEdits state updateMod uri = do
             "Rename.GetParsedModuleWithComments"
             state
             (use GetAnnotatedParsedSource nfp)
-    let (ps, apiAnns) = (astA annotatedAst, annsA annotatedAst)
+    let (ps, anns) = (astA annotatedAst, annsA annotatedAst)
 #if !MIN_VERSION_ghc(9,2,1)
     let src = T.pack $ exactPrint ps anns
         res = T.pack $ exactPrint (updateMod <$> ps) anns
